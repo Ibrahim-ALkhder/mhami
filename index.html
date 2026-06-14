@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -13,6 +14,7 @@
   html, body { font-family: 'Tajawal', 'Segoe UI', sans-serif; background:#F7F3ED; color:#3A332C; }
   button, input, select { font-family: inherit; cursor: pointer; }
   #app { min-height: 100vh; direction: rtl; padding: 20px; padding-bottom: 100px; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 </style>
 </head>
 <body>
@@ -34,10 +36,57 @@ const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1
 // logs: { [taskId]: { [dateKey]: { [occurrenceIndex]: true } } }
 let tasks = JSON.parse(localStorage.getItem("tasks") || "[]");
 let logs = JSON.parse(localStorage.getItem("logs") || "{}");
+let notifiedStarts = JSON.parse(localStorage.getItem("notifiedStarts") || "{}"); // { taskId: dateKey }
+let lastHourlyCheck = JSON.parse(localStorage.getItem("lastHourlyCheck") || "0");
 
 function save() {
   localStorage.setItem("tasks", JSON.stringify(tasks));
   localStorage.setItem("logs", JSON.stringify(logs));
+  localStorage.setItem("notifiedStarts", JSON.stringify(notifiedStarts));
+  localStorage.setItem("lastHourlyCheck", JSON.stringify(lastHourlyCheck));
+}
+
+// ---- Sound ----
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+function playChime(type) {
+  try {
+    ensureAudio();
+    const now = audioCtx.currentTime;
+    const notes = type === "start" ? [880, 1108, 1318] : [660, 660];
+    let t = now;
+    for (const freq of notes) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.25, t + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.4);
+      t += type === "start" ? 0.18 : 0.4;
+    }
+  } catch (e) {}
+}
+
+// ---- Notifications ----
+function ensureNotificationPermission() {
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+function showNotification(title, body) {
+  if ("Notification" in window && Notification.permission === "granted") {
+    try { new Notification(title, { body, icon: "icon-192.png" }); } catch (e) {}
+  }
 }
 
 // ---- State ----
@@ -120,6 +169,49 @@ function doneCountToday(taskId) {
   return Object.keys(dayLog).length;
 }
 
+// ---- Alert checks ----
+function checkAlerts() {
+  const now = new Date();
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
+  const tKey = todayKey(now);
+
+  // 1) Start-time chime: fire once per task per day, within the minute it starts
+  for (const t of tasks) {
+    const start = timeToMinutes(t.startTime);
+    if (start === null) continue;
+    if (minutesNow === start && notifiedStarts[t.id] !== tKey) {
+      playChime("start");
+      showNotification("وقت المهمة بدأ", `حان وقت: ${t.name}`);
+      notifiedStarts[t.id] = tKey;
+      save();
+    }
+  }
+
+  // 2) Hourly check: for tasks whose window has started but not finished/completed, remind every hour
+  const nowMs = Date.now();
+  const hourMs = 60 * 60 * 1000;
+  if (nowMs - lastHourlyCheck >= hourMs) {
+    let anyPending = false;
+    for (const t of tasks) {
+      const start = timeToMinutes(t.startTime);
+      const end = timeToMinutes(t.endTime);
+      if (start === null) continue;
+      const started = minutesNow >= start;
+      const ended = end !== null && minutesNow > end;
+      if (started && !ended) {
+        const done = doneCountToday(t.id);
+        if (done < t.timesPerDay) {
+          anyPending = true;
+          showNotification("تذكير", `ما زلت ما خلصت: ${t.name}`);
+        }
+      }
+    }
+    if (anyPending) playChime("reminder");
+    lastHourlyCheck = nowMs;
+    save();
+  }
+}
+
 // ---- Dashboard ----
 function dashboardData() {
   const now = new Date();
@@ -149,6 +241,7 @@ function dashboardData() {
 function render() {
   const app = document.getElementById("app");
   const dateStr = new Date().toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
+  const notifGranted = ("Notification" in window) && Notification.permission === "granted";
 
   let html = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
@@ -161,6 +254,14 @@ function render() {
       </button>
     </div>
   `;
+
+  if (!notifGranted) {
+    html += `
+      <div onclick="window.__enableAlerts()" style="background:#FBEFE9;border:1px solid #E3CFC9;border-radius:14px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#C77B5E;font-weight:700;text-align:center;">
+        🔔 اضغط هنا لتفعيل التنبيهات الصوتية والإشعارات
+      </div>
+    `;
+  }
 
   if (tasks.length === 0) {
     html += `<div style="text-align:center;padding:60px 20px;color:#A89F92;font-size:15px;">ما في مهام بعد. ضيف أول مهمة عشان تبدأ تتابع تقدمك.</div>`;
@@ -256,7 +357,7 @@ function render() {
                 style="width:100%;padding:10px;border-radius:12px;border:1px solid #E3DCD0;background:#fff;font-size:14px;outline:none;" />
             </div>
           </div>
-          <div style="font-size:11px;color:#A89F92;margin-bottom:18px;">لو حددت وقت النهاية، أي تشيك ما عملته قبله يعتبر فايت لذلك اليوم</div>
+          <div style="font-size:11px;color:#A89F92;margin-bottom:18px;">لو حددت وقت البداية، يجيك تنبيه صوتي عند بدايته، وكل ساعة بعدها لو ما خلصت المهمة (إلى وقت النهاية لو محدد)</div>
 
           <button onclick="window.__addTask()" ${!formName.trim() ? "disabled" : ""} style="width:100%;padding:14px;border-radius:12px;border:none;background:${formName.trim() ? "#3A332C" : "#D8D1C5"};color:#fff;font-weight:700;font-size:15px;">إضافة المهمة</button>
         </div>
@@ -321,13 +422,20 @@ window.__setEnd = (v) => { formEndTime = v; };
 window.__addTask = addTask;
 window.__remove = removeTask;
 window.__toggle = toggleOccurrence;
+window.__enableAlerts = () => {
+  ensureAudio();
+  playChime("start");
+  ensureNotificationPermission();
+  render();
+};
 
 render();
 
-// Re-render periodically to catch window-passed transitions
+// Check every 30 seconds for start-time chimes and hourly reminders
 setInterval(() => {
+  checkAlerts();
   if (!showAdd) render();
-}, 60000);
+}, 30000);
 
 // Register service worker for offline support
 if ('serviceWorker' in navigator) {
