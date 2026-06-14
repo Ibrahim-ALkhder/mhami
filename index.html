@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>مهامي</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#3A332C" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%233A332C'/%3E%3Cpath d='M25 50 L42 67 L75 33' stroke='%23E8B86D' stroke-width='10' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { font-family: 'Tajawal', 'Segoe UI', sans-serif; background:#F7F3ED; color:#3A332C; }
+  button, input, select { font-family: inherit; cursor: pointer; }
+  #app { min-height: 100vh; direction: rtl; padding: 20px; padding-bottom: 100px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const FREQ_LABELS = { daily: "يومي", weekly: "أسبوعي", monthly: "شهري" };
+const COLORS = ["#E8B86D", "#7BA88A", "#C77B5E", "#6E8FA8", "#A87BA8", "#B8A45E"];
+
+const todayKey = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+};
+const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+
+// ---- Storage ----
+// task: { id, name, freq, color, timesPerDay, startTime, endTime }
+// logs: { [taskId]: { [dateKey]: { [occurrenceIndex]: true } } }
+let tasks = JSON.parse(localStorage.getItem("tasks") || "[]");
+let logs = JSON.parse(localStorage.getItem("logs") || "{}");
+
+function save() {
+  localStorage.setItem("tasks", JSON.stringify(tasks));
+  localStorage.setItem("logs", JSON.stringify(logs));
+}
+
+// ---- State ----
+let showAdd = false;
+let showDashboard = false;
+let formName = "";
+let formFreq = "daily";
+let formTimesPerDay = 1;
+let formStartTime = "";
+let formEndTime = "";
+
+function resetForm() {
+  formName = "";
+  formFreq = "daily";
+  formTimesPerDay = 1;
+  formStartTime = "";
+  formEndTime = "";
+}
+
+function addTask() {
+  if (!formName.trim()) return;
+  const color = COLORS[tasks.length % COLORS.length];
+  tasks.push({
+    id: Date.now(),
+    name: formName.trim(),
+    freq: formFreq,
+    color,
+    timesPerDay: Math.max(1, parseInt(formTimesPerDay) || 1),
+    startTime: formStartTime || null,
+    endTime: formEndTime || null,
+  });
+  resetForm();
+  showAdd = false;
+  save();
+  render();
+}
+
+function removeTask(id) {
+  tasks = tasks.filter(t => t.id !== id);
+  delete logs[id];
+  save();
+  render();
+}
+
+// ---- Time helpers ----
+function nowTime() {
+  const d = new Date();
+  return d.getHours() * 60 + d.getMinutes();
+}
+function timeToMinutes(t) {
+  if (!t) return null;
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function windowPassed(task) {
+  const end = timeToMinutes(task.endTime);
+  if (end === null) return false;
+  return nowTime() > end;
+}
+
+function getTaskLog(taskId) {
+  const key = todayKey();
+  if (!logs[taskId]) logs[taskId] = {};
+  if (!logs[taskId][key]) logs[taskId][key] = {};
+  return logs[taskId][key];
+}
+
+function toggleOccurrence(taskId, idx) {
+  const taskLog = getTaskLog(taskId);
+  if (taskLog[idx]) delete taskLog[idx];
+  else taskLog[idx] = true;
+  save();
+  render();
+}
+
+function doneCountToday(taskId) {
+  const key = todayKey();
+  const dayLog = (logs[taskId] && logs[taskId][key]) || {};
+  return Object.keys(dayLog).length;
+}
+
+// ---- Dashboard ----
+function dashboardData() {
+  const now = new Date();
+  const mk = monthKey(now);
+  const todayDate = now.getDate();
+
+  return tasks.map(t => {
+    const taskLogs = logs[t.id] || {};
+    let doneCount = 0;
+    for (const dateStr of Object.keys(taskLogs)) {
+      if (dateStr.startsWith(mk)) {
+        doneCount += Object.keys(taskLogs[dateStr]).length;
+      }
+    }
+
+    let target;
+    if (t.freq === "daily") target = todayDate * t.timesPerDay;
+    else if (t.freq === "weekly") target = Math.max(1, Math.ceil(todayDate / 7)) * t.timesPerDay;
+    else target = t.timesPerDay;
+
+    const pct = Math.min(100, Math.round((doneCount / target) * 100));
+    return { ...t, doneCount, target, pct };
+  });
+}
+
+// ---- Rendering ----
+function render() {
+  const app = document.getElementById("app");
+  const dateStr = new Date().toLocaleDateString("ar-EG", { weekday: "long", day: "numeric", month: "long" });
+
+  let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+      <div>
+        <h1 style="font-size:28px;font-weight:900;margin:0;">مهامي</h1>
+        <p style="margin:4px 0 0;font-size:13px;color:#8C8175;">${dateStr}</p>
+      </div>
+      <button onclick="window.__openDashboard()" style="background:#3A332C;color:#F7F3ED;border:none;border-radius:12px;padding:10px 16px;display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;">
+        📊 التقدم
+      </button>
+    </div>
+  `;
+
+  if (tasks.length === 0) {
+    html += `<div style="text-align:center;padding:60px 20px;color:#A89F92;font-size:15px;">ما في مهام بعد. ضيف أول مهمة عشان تبدأ تتابع تقدمك.</div>`;
+  }
+
+  html += `<div style="display:flex;flex-direction:column;gap:10px;">`;
+  for (const t of tasks) {
+    const taskLog = getTaskLog(t.id);
+    const passed = windowPassed(t);
+    const timeLabel = (t.startTime && t.endTime) ? `${t.startTime} - ${t.endTime}` : "";
+
+    html += `
+      <div style="background:#FFFFFF;border-radius:16px;padding:14px 16px;box-shadow:0 1px 3px rgba(58,51,44,0.06);border-right:4px solid ${t.color};">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:${t.timesPerDay > 1 ? '10px' : '0'};">
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:15px;">${escapeHtml(t.name)}</div>
+            <div style="font-size:12px;color:#A89F92;margin-top:2px;">
+              ${FREQ_LABELS[t.freq]}${t.timesPerDay > 1 ? ` · ${t.timesPerDay}x باليوم` : ""}${timeLabel ? ` · ${timeLabel}` : ""}
+            </div>
+          </div>
+          <button onclick="window.__remove(${t.id})" style="background:none;border:none;color:#C9BFB2;padding:6px;font-size:16px;">🗑</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+    `;
+
+    for (let i = 0; i < t.timesPerDay; i++) {
+      const done = !!taskLog[i];
+      let bg, border, content, opacity = 1;
+      if (done) {
+        bg = t.color; border = "none"; content = "✓";
+      } else if (passed) {
+        bg = "#F3E8E5"; border = "2px solid #E3CFC9"; content = "✕"; opacity = 0.8;
+      } else {
+        bg = "transparent"; border = "2px solid #D8D1C5"; content = "";
+      }
+      const clickable = !passed || done;
+      html += `
+        <button ${clickable ? `onclick="window.__toggle(${t.id}, ${i})"` : ""}
+          style="width:38px;height:38px;border-radius:10px;border:${border};background:${bg};display:flex;align-items:center;justify-content:center;font-size:16px;color:${done ? '#fff' : (passed ? '#C77B5E' : '#D8D1C5')};font-weight:700;opacity:${opacity};${!clickable ? 'cursor:default;' : ''}">
+          ${content || (i+1)}
+        </button>
+      `;
+    }
+
+    html += `</div>`;
+    if (passed && doneCountToday(t.id) < t.timesPerDay) {
+      html += `<div style="font-size:12px;color:#C77B5E;margin-top:8px;">انتهى وقت اليوم — ما اكتملت كل المرات</div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+
+  // Floating add button
+  html += `
+    <button onclick="window.__openAdd()" style="position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#C77B5E;color:#fff;border:none;border-radius:999px;width:56px;height:56px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(199,123,94,0.4);font-size:26px;">+</button>
+  `;
+
+  // Add Task Modal
+  if (showAdd) {
+    html += `
+      <div onclick="window.__closeAdd(event)" style="position:fixed;inset:0;background:rgba(58,51,44,0.4);display:flex;align-items:flex-end;justify-content:center;z-index:50;">
+        <div onclick="event.stopPropagation()" style="background:#F7F3ED;border-radius:20px 20px 0 0;padding:24px 20px 32px;width:100%;max-width:420px;max-height:88vh;overflow-y:auto;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+            <h2 style="font-size:18px;font-weight:900;">مهمة جديدة</h2>
+            <button onclick="window.__closeAdd()" style="background:none;border:none;color:#A89F92;font-size:18px;">✕</button>
+          </div>
+
+          <label style="font-size:13px;font-weight:700;color:#8C8175;">اسم المهمة</label>
+          <input id="taskNameInput" value="${escapeHtml(formName)}" placeholder="مثلاً: الصلاة" oninput="window.__setName(this.value)"
+            style="width:100%;padding:12px 14px;border-radius:12px;border:1px solid #E3DCD0;background:#fff;margin-top:6px;margin-bottom:16px;font-size:15px;outline:none;" />
+
+          <label style="font-size:13px;font-weight:700;color:#8C8175;">الفترة</label>
+          <div style="display:flex;gap:8px;margin-top:6px;margin-bottom:16px;">
+            ${Object.entries(FREQ_LABELS).map(([key,label]) => `
+              <button onclick="window.__setFreq('${key}')" style="flex:1;padding:10px;border-radius:12px;border:${formFreq===key ? "2px solid #C77B5E" : "1px solid #E3DCD0"};background:${formFreq===key ? "#FBEFE9" : "#fff"};font-weight:700;font-size:14px;color:${formFreq===key ? "#C77B5E" : "#8C8175"};">${label}</button>
+            `).join("")}
+          </div>
+
+          <label style="font-size:13px;font-weight:700;color:#8C8175;">كم مرة في اليوم؟</label>
+          <input id="timesInput" type="number" min="1" max="20" value="${formTimesPerDay}" oninput="window.__setTimes(this.value)"
+            style="width:100%;padding:12px 14px;border-radius:12px;border:1px solid #E3DCD0;background:#fff;margin-top:6px;margin-bottom:16px;font-size:15px;outline:none;" />
+
+          <label style="font-size:13px;font-weight:700;color:#8C8175;">الفترة الزمنية (اختياري)</label>
+          <div style="display:flex;gap:8px;margin-top:6px;margin-bottom:8px;">
+            <div style="flex:1;">
+              <div style="font-size:11px;color:#A89F92;margin-bottom:4px;">من</div>
+              <input id="startTimeInput" type="time" value="${formStartTime}" oninput="window.__setStart(this.value)"
+                style="width:100%;padding:10px;border-radius:12px;border:1px solid #E3DCD0;background:#fff;font-size:14px;outline:none;" />
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:11px;color:#A89F92;margin-bottom:4px;">إلى</div>
+              <input id="endTimeInput" type="time" value="${formEndTime}" oninput="window.__setEnd(this.value)"
+                style="width:100%;padding:10px;border-radius:12px;border:1px solid #E3DCD0;background:#fff;font-size:14px;outline:none;" />
+            </div>
+          </div>
+          <div style="font-size:11px;color:#A89F92;margin-bottom:18px;">لو حددت وقت النهاية، أي تشيك ما عملته قبله يعتبر فايت لذلك اليوم</div>
+
+          <button onclick="window.__addTask()" ${!formName.trim() ? "disabled" : ""} style="width:100%;padding:14px;border-radius:12px;border:none;background:${formName.trim() ? "#3A332C" : "#D8D1C5"};color:#fff;font-weight:700;font-size:15px;">إضافة المهمة</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // Dashboard Modal
+  if (showDashboard) {
+    const data = dashboardData();
+    const monthStr = new Date().toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
+    html += `
+      <div onclick="window.__closeDashboard(event)" style="position:fixed;inset:0;background:rgba(58,51,44,0.4);display:flex;align-items:flex-end;justify-content:center;z-index:50;">
+        <div onclick="event.stopPropagation()" style="background:#F7F3ED;border-radius:20px 20px 0 0;padding:24px 20px 36px;width:100%;max-width:420px;max-height:85vh;overflow-y:auto;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h2 style="font-size:18px;font-weight:900;">تقدمك هذا الشهر</h2>
+            <button onclick="window.__closeDashboard()" style="background:none;border:none;color:#A89F92;font-size:18px;">✕</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;color:#A89F92;font-size:13px;margin-bottom:20px;">📅 ${monthStr}</div>
+    `;
+    if (data.length === 0) {
+      html += `<div style="text-align:center;padding:40px 0;color:#A89F92;font-size:14px;">ضيف مهام عشان تشوف تقدمك هنا</div>`;
+    }
+    for (const d of data) {
+      html += `
+        <div style="margin-bottom:18px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-weight:700;font-size:14px;">${escapeHtml(d.name)}</span>
+            <span style="font-size:13px;color:#8C8175;">${d.doneCount} / ${d.target}</span>
+          </div>
+          <div style="background:#E3DCD0;border-radius:999px;height:10px;overflow:hidden;">
+            <div style="width:${d.pct}%;height:100%;background:${d.color};border-radius:999px;transition:width 0.4s ease;"></div>
+          </div>
+          <div style="font-size:12px;color:#A89F92;margin-top:4px;">
+            ${d.pct >= 100 ? "ممتاز! حققت هدفك للشهر 🎯" : `${d.pct}% من هدف الشهر`}
+          </div>
+        </div>
+      `;
+    }
+    html += `</div></div>`;
+  }
+
+  app.innerHTML = html;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ---- Global handlers ----
+window.__openAdd = () => { resetForm(); showAdd = true; render(); };
+window.__closeAdd = (e) => { showAdd = false; render(); };
+window.__openDashboard = () => { showDashboard = true; render(); };
+window.__closeDashboard = (e) => { showDashboard = false; render(); };
+window.__setName = (v) => { formName = v; };
+window.__setFreq = (f) => { formFreq = f; render(); };
+window.__setTimes = (v) => { formTimesPerDay = v; };
+window.__setStart = (v) => { formStartTime = v; };
+window.__setEnd = (v) => { formEndTime = v; };
+window.__addTask = addTask;
+window.__remove = removeTask;
+window.__toggle = toggleOccurrence;
+
+render();
+
+// Re-render periodically to catch window-passed transitions
+setInterval(() => {
+  if (!showAdd) render();
+}, 60000);
+
+// Register service worker for offline support
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
